@@ -3,6 +3,7 @@ package android.security.jcic;
 import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
 import javacard.framework.Util;
+import javacard.security.CryptoException;
 import javacard.security.KeyBuilder;
 import javacard.security.MessageDigest;
 import javacard.security.RandomData;
@@ -10,17 +11,20 @@ import javacard.security.RandomData;
 public class CryptoManager {
 
     public static final byte FLAG_TEST_CREDENTIAL = 0;
-    public static final byte FLAG_CREDENTIAL_KEYS_INITIALIZED = 1;
-    public static final byte FLAG_CREDENTIAL_PERSONALIZATION_STATE = 2;
-    public static final byte FLAG_CREDENTIAL_PERSONALIZING_PROFILES = 3;
-    public static final byte FLAG_CREDENTIAL_PERSONALIZING_ENTRIES = 4;
-    public static final byte FLAG_CREDENTIAL_PERSONALIZING_NAMESPACE = 5;
-    public static final byte FLAG_CREDENTIAL_RETRIEVAL_STARTED = 6;
-    public static final byte FLAG_CREDENTIAL_RETRIEVAL_ENTRIES = 7;
-    public static final byte FLAG_CREDENTIAL_RETRIEVAL_CHUNKED = 8;
-    public static final byte FLAG_CREDENTIAL_RETRIEVAL_NAMESPACE = 9;
-    public static final byte FLAG_UPDATE_CREDENTIAL = 0x0A;
-    public static final byte FLAG_HMAC_INITIALIZED = 0x0B;
+    public static final byte FLAG_PROVISIONING_INITIALIZED = 1;
+    public static final byte FLAG_PROVISIONING_KEYS_INITIALIZED = 2;
+    public static final byte FLAG_PROVISIONING_CREDENTIAL_STATE = 3;
+    public static final byte FLAG_PERSONALIZING_ENTRIES = 4;
+    public static final byte FLAG_PERSONALIZING_FINISH_ENTRIES = 5;
+    public static final byte FLAG_PERSONALIZING_FINISH_ENTRIES_VALUES = 6;
+    public static final byte FLAG_PERSONALIZING_FINISH_ADDING_ENTRIES = 7;
+    public static final byte FLAG_PERSONALIZING_FINISH_GET_CREDENTIAL = 8;
+    public static final byte FLAG_PRESENTING_CREATE_EPHEMERAL = 9;
+    public static final byte FLAG_PRESENTING_CREATE_AUTH_CHALLENGE = 0x0A;
+    public static final byte FLAG_PRESENTING_START_RETRIEVAL = 0x0B;
+    public static final byte FLAG_PRESENTING_START_RETRIEVE_ENTRY = 0x0C;
+    public static final byte FLAG_UPDATE_CREDENTIAL = 0x0D;
+    public static final byte FLAG_HMAC_INITIALIZED = 0x0E;
     private static final byte STATUS_FLAGS_SIZE = 2;
 
     public static final byte AES_GCM_KEY_SIZE = 16; 
@@ -30,9 +34,7 @@ public class CryptoManager {
     public static final byte SHA256_DIGEST_SIZE = 32;
 
     public static final short TEMP_BUFFER_SIZE = 2048;
-    public static final short TEMP_BUFFER_DOCTYPE_MAXSIZE = 64;
-    public static final short TEMP_BUFFER_DOCTYPE_POS = TEMP_BUFFER_SIZE;
-    public static final short TEMP_BUFFER_IV_POS = TEMP_BUFFER_DOCTYPE_POS + TEMP_BUFFER_DOCTYPE_MAXSIZE;
+    public static final short TEMP_BUFFER_IV_POS = TEMP_BUFFER_SIZE;
     public static final short TEMP_BUFFER_GCM_TAG_POS = TEMP_BUFFER_IV_POS + AES_GCM_IV_SIZE;
     
     // Actual Crypto implementation
@@ -50,7 +52,7 @@ public class CryptoManager {
     private final short[] mCredentialKeyPairLengths;
 
     // Signature object for creating and verifying credential signatures 
-    final MessageDigest mDigest;
+    MessageDigest mDigest;
     // Digester object for calculating proof of provisioning data digest
     final MessageDigest mSecondaryDigest;
     // Digester object for calculating addition data digest
@@ -68,10 +70,10 @@ public class CryptoManager {
     //TODO pre-shared key is hardcoded for now but we need to get it through either provisioning or from keymaster
     private byte[] mPreSharedKey = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-    public CryptoManager(APDUManager apduManager, ICryptoProvider cryptoProvider /*AccessControlManager accessControlManager,*/) {
+    public CryptoManager(ICryptoProvider cryptoProvider /*AccessControlManager accessControlManager,*/) {
     	mCryptoProvider = cryptoProvider;
     	
-        mTempBuffer = JCSystem.makeTransientByteArray((short) (TEMP_BUFFER_SIZE + TEMP_BUFFER_DOCTYPE_MAXSIZE + AES_GCM_IV_SIZE + AES_GCM_TAG_SIZE),
+        mTempBuffer = JCSystem.makeTransientByteArray((short) (TEMP_BUFFER_SIZE + AES_GCM_IV_SIZE + AES_GCM_TAG_SIZE),
                 JCSystem.CLEAR_ON_DESELECT);
 
         mStatusFlags = JCSystem.makeTransientByteArray((short)(STATUS_FLAGS_SIZE), JCSystem.CLEAR_ON_DESELECT);
@@ -79,15 +81,22 @@ public class CryptoManager {
         // Secure Random number generation for HBK
         mRandomData = RandomData.getInstance(RandomData.ALG_TRNG);
         mRandomData.nextBytes(mTempBuffer, (short)0, AES_GCM_KEY_SIZE);
-        mHBK = JCSystem.makeTransientByteArray(AES_GCM_KEY_SIZE, JCSystem.CLEAR_ON_RESET);
+        mHBK = new byte[AES_GCM_KEY_SIZE];
         Util.arrayCopyNonAtomic(mTempBuffer, (short) 0, mHBK, (short) 0, AES_GCM_KEY_SIZE);
+        Util.arrayFillNonAtomic(mTempBuffer, (byte)0, AES_GCM_KEY_SIZE, (byte)0);
 
         // Create the storage key byte array 
         mCredentialStorageKey = JCSystem.makeTransientByteArray(AES_GCM_KEY_SIZE, JCSystem.CLEAR_ON_RESET);
         mCredentialKeyPair = JCSystem.makeTransientByteArray((short)(EC_KEY_SIZE * 3 + 1), JCSystem.CLEAR_ON_RESET);
         mCredentialKeyPairLengths = JCSystem.makeTransientShortArray((short)2, JCSystem.CLEAR_ON_RESET);
 
-        mDigest = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+        try {
+            //External access is enabled to pass VTS, after some VTS passed, remaining VTS failed while MessageDigest update if it is not exported.
+            mDigest = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, true);
+        } catch (CryptoException e) {
+            //External access is not supported in JCard simulator.
+            mDigest = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+        }
         mSecondaryDigest = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
         mAdditionalDataDigester = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
 
@@ -98,16 +107,7 @@ public class CryptoManager {
      * as well as all status flags.
      */
     public void reset() {
-        ICUtil.setBit(mStatusFlags, FLAG_TEST_CREDENTIAL, false);
-        ICUtil.setBit(mStatusFlags, FLAG_CREDENTIAL_KEYS_INITIALIZED, false);
-        ICUtil.setBit(mStatusFlags, FLAG_CREDENTIAL_PERSONALIZATION_STATE, false);
-        ICUtil.setBit(mStatusFlags, FLAG_CREDENTIAL_PERSONALIZING_PROFILES, false);
-        ICUtil.setBit(mStatusFlags, FLAG_CREDENTIAL_PERSONALIZING_NAMESPACE, false);
-        ICUtil.setBit(mStatusFlags, FLAG_CREDENTIAL_RETRIEVAL_STARTED, false);
-        ICUtil.setBit(mStatusFlags, FLAG_CREDENTIAL_RETRIEVAL_ENTRIES, false);
-        ICUtil.setBit(mStatusFlags, FLAG_CREDENTIAL_RETRIEVAL_CHUNKED, false);
-        ICUtil.setBit(mStatusFlags, FLAG_CREDENTIAL_RETRIEVAL_NAMESPACE, false);
-
+        Util.arrayFillNonAtomic(mStatusFlags, (short)0, STATUS_FLAGS_SIZE, (byte)0);
         Util.arrayFillNonAtomic(mCredentialStorageKey, (short)0, KeyBuilder.LENGTH_AES_128, (byte)0);
     }
     
@@ -220,11 +220,11 @@ public class CryptoManager {
     }
     
     public void assertCredentialInitialized() {
-        assertStatusFlagSet(FLAG_CREDENTIAL_KEYS_INITIALIZED);
+        assertStatusFlagSet(FLAG_PROVISIONING_INITIALIZED);
     }
 
     public void assertInPersonalizationState() {
-        assertStatusFlagSet(FLAG_CREDENTIAL_PERSONALIZATION_STATE);
+        assertStatusFlagSet(FLAG_PROVISIONING_CREDENTIAL_STATE);
     }
 
     public void assertStatusFlagNotSet(byte statusFlag) {
@@ -295,6 +295,8 @@ public class CryptoManager {
                                             byte[] authTag, short authTagOffset, short authTagLen) {
 
         if(isTestCredential) {
+            //In case of testCredential HBK should be initialized with 0's
+            //If testCredential is true mCredentialStorageKey is already initialized with 0's so no need to create separate HBK for testCredential.
             return mCryptoProvider.aesGCMDecrypt(mCredentialStorageKey, (short)0, (short)mCredentialStorageKey.length,
                     encryptedCredentialKeyBlob, keyBlobOff, keyBlobSize,
                     outData, outDataOffset,

@@ -154,7 +154,7 @@ public class ICUtil {
                 short a1 = (short)(first[(short)(firstOffset + index)] & 0x00FF);
                 sum = (short)(carry + a1);
             }
-            first[firstOffset + index] = (byte)sum;
+            first[(short)(firstOffset + index)] = (byte)sum;
             carry = (byte) (sum > 255 ? 1 : 0);
             index--;
         }
@@ -305,7 +305,14 @@ public class ICUtil {
         return cborEncoder.getCurrentOffset();
     }
 
-    public static short readUint(CBORDecoder cborDecoder, byte[] outBuff, short outBuffOffset) {
+    /**
+     * Reads unsigned integer value of any size from CBORDecoder and copy in out buffer.
+     * @param cborDecoder CBOR decoder to read UInt from
+     * @param outBuff Out put UInt value.
+     * @param outBuffOffset Out buffer offset
+     * @return length of UInt
+     */
+    public static short readUInt(CBORDecoder cborDecoder, byte[] outBuff, short outBuffOffset) {
         if(cborDecoder.getMajorType() != CBORBase.TYPE_UNSIGNED_INTEGER) {
             ISOException.throwIt(ISO7816.SW_DATA_INVALID);
         }
@@ -325,6 +332,11 @@ public class ICUtil {
         return intSize;
     }
 
+    /**
+     * Calculates size of required bytes to encode given size of data
+     * @param size of data.
+     * @return size of required bytes to encode given size of data.
+     */
     public static byte calCborAdditionalLengthBytesFor(short size) {
         if (size < 24) {
             return (byte)0;
@@ -334,15 +346,37 @@ public class ICUtil {
         return SHORT_SIZE;
     }
 
+    /**
+     * Calculates size of required bytes to encode given size of data
+     * @param valueBuff size of data in byte array
+     * @param valueOffset size byte array offset
+     * @param valueSize size byte array length
+     * @return size of required bytes to encode given size of data.
+     */
     public static byte calCborAdditionalLengthBytesFor(byte[] valueBuff, short valueOffset, short valueSize) {
         if(valueSize <= 0 || valueSize > 8) {
             ISOException.throwIt(ISO7816.SW_DATA_INVALID);
         }
         byte i = 0;
-        for (; valueBuff[valueOffset + i] == 0x0 && i < valueSize; i++);
+        for (; valueBuff[(short)(valueOffset + i)] == 0x0 && i < valueSize; i++);
         if(i > 0) {
             valueSize = (short) (valueSize - i);
         }
         return  valueSize > INT_SIZE ? LONG_SIZE : valueSize > SHORT_SIZE ? INT_SIZE : valueSize > BYTE_SIZE ? SHORT_SIZE : (short)(valueBuff[(short)(valueOffset + i)] & 0x00FF) > (short)24 ? BYTE_SIZE : (byte)0;
+    }
+
+    public static byte arrayCompare(byte src[], short srcOff, byte dest[], short destOff, short length) {
+        if (length < 0) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        for (short i = 0; i < length; i++) {
+            if (src[(short)(srcOff + i)] != dest[(short)(destOff + i)]) {
+                short thisSrc = (short) (src[(short)(srcOff + i)] & 0x00ff);
+                short thisDest = (short) (dest[(short)(destOff + i)] & 0x00ff);
+                return (byte) (thisSrc >= thisDest ? 1 : -1);
+            }
+        }
+
+        return 0;
     }
 }
